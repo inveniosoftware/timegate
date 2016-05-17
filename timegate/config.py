@@ -56,18 +56,30 @@ class Config(dict):
             self['USE_TIMEMAPS'] = False
 
         # Cache
-        # When False, all cache requests will be cache MISS
-        self['CACHE_USE'] = conf.getboolean('cache', 'cache_activated')
+        self['CACHE_BACKEND'] = conf.get('cache', 'cache_backend')
         # Time window in which the cache value is considered young
         # enough to be valid
-        self['CACHE_TOLERANCE'] = conf.getint('cache', 'cache_refresh_time')
-        # Cache files paths
-        self['CACHE_DIRECTORY'] = conf.get(
-            'cache', 'cache_directory').rstrip('/')
-        # Maximum number of TimeMaps stored in cache
-        self['CACHE_MAX_VALUES'] = conf.getint('cache', 'cache_max_values')
-        # Cache files paths
-        self['CACHE_FILE'] = self['CACHE_DIRECTORY']  # + '/cache_data'
+        self['CACHE_REFRESH_TIME'] = conf.getint('cache', 'cache_refresh_time')
+
+        options = {
+            'cache_backend': None,
+            'cache_refresh_time': None,
+            'default_timeout': 'getint',
+            'mode': 'getint',
+            'port': 'getint',
+            'threshold': 'getint',
+        }
+        self.setdefault('CACHE_OPTIONS', {})
+
+        for key in conf.options('cache'):
+            if key in options:
+                getter = options[key]
+                if getter:
+                    self['CACHE_OPTIONS'][key] = getattr(conf, getter)(
+                        'cache', key
+                    )
+            else:
+                self['CACHE_OPTIONS'][key] = conf.get('cache', key)
 
     def from_object(self, obj):
         """Update config with values from given object.

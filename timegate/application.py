@@ -108,7 +108,7 @@ class TimeGate(object):
         self.config.update(config or {})
         if cache:
             self.cache = cache
-        elif self.config['CACHE_USE']:
+        else:
             self._build_default_cache()
 
     @cached_property
@@ -143,10 +143,10 @@ class TimeGate(object):
     def _build_default_cache(self):
         """Build default cache object."""
         self.cache = Cache(
-            self.config['CACHE_FILE'],
-            self.config['CACHE_TOLERANCE'],
-            self.config['CACHE_EXP'],
-            self.config['CACHE_MAX_VALUES'],
+            self.config.get('CACHE_BACKEND',
+                            'werkzeug.contrib.cache.NullCache'),
+            cache_refresh_time=self.config.get('CACHE_REFRESH_TIME', 86400),
+            **self.config.get('CACHE_OPTIONS', {})
         )
 
     def __repr__(self):

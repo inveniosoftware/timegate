@@ -23,8 +23,10 @@ def app(tmpdir):
     return application.TimeGate(config=dict(
         HOST='http://localhost',
         BASE_URI='http://www.example.com/',
-        CACHE_USE=True,
-        CACHE_FILE=tmpdir.mkdir('cache').strpath,
+        CACHE_BACKEND='werkzeug.contrib.cache:FileSystemCache',
+        CACHE_OPTIONS={
+            'cache_dir': tmpdir.mkdir('cache').strpath,
+        },
     ))
 
 
