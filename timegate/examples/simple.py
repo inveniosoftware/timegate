@@ -23,13 +23,13 @@ from timegate.handler import Handler
 
 class ExampleHandler(Handler):
 
-    def __init__(self):
+    def __init__(self, base_uri='http://www.example.com/'):
         Handler.__init__(self)
         # Initialization code here. This part is run only once
         versions_a = [
-            'http://www.example.com/resourceA_v1',
-            'http://www.example.com/resourceA_v2',
-            'http://www.example.com/resourceA_v3'
+            '{0}resourceA_v1'.format(base_uri),
+            '{0}resourceA_v2'.format(base_uri),
+            '{0}resourceA_v3'.format(base_uri)
 
         ]
         date_times_a = [
@@ -38,8 +38,8 @@ class ExampleHandler(Handler):
             '2015-01-03T22:00:00Z'
         ]
         versions_b = [
-            'http://www.example.com/resourceB_v1',
-            'http://www.example.com/resourceB_v2',
+            '{0}resourceB_v1'.format(base_uri),
+            '{0}resourceB_v2'.format(base_uri),
 
         ]
         date_times_b = [
@@ -47,16 +47,16 @@ class ExampleHandler(Handler):
             '2000-11-08T19:05:09Z'
         ]
         self.archives = {
-            'http://www.example.com/resourceA': versions_a,
-            'http://www.example.com/resourceB': versions_b,
-            'http://www.example.com/resource%20space': [
-                'http://www.example.com/space',
+            '{0}resourceA'.format(base_uri): versions_a,
+            '{0}resourceB'.format(base_uri): versions_b,
+            '{0}resource%20space'.format(base_uri): [
+                '{0}space'.format(base_uri),
             ],
         }
         self.dates = {
-            'http://www.example.com/resourceA': date_times_a,
-            'http://www.example.com/resourceB': date_times_b,
-            'http://www.example.com/resource%20space': [
+            '{0}resourceA'.format(base_uri): date_times_a,
+            '{0}resourceB'.format(base_uri): date_times_b,
+            '{0}resource%20space'.format(base_uri): [
                 '1970-01-01T00:00:00Z'
             ],
         }

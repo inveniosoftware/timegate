@@ -18,11 +18,13 @@ import inspect
 import json
 import logging
 import os
+import re
 from datetime import datetime
 
 from dateutil.tz import tzutc
 from link_header import Link, LinkHeader
 from pkg_resources import iter_entry_points
+from werkzeug.datastructures import CombinedMultiDict
 from werkzeug.exceptions import HTTPException, abort
 from werkzeug.http import http_date, parse_date
 from werkzeug.local import Local, LocalManager
@@ -46,6 +48,8 @@ local_manager = LocalManager([local])
 
 request = local('request')
 """Proxy to request object."""
+
+_RE_HANDLER = re.compile('^((?P<handler_name>[^.]+)\.)?(?P<endpoint>[^.]+)$')
 
 
 def url_for(*args, **kwargs):
@@ -75,13 +79,17 @@ def load_handler(name_or_path):
 class URIConverter(BaseConverter):
     """URI Converter."""
 
-    def __init__(self, url_map, base_uri=None):
+    def __init__(self, url_map, base_uri=None, default=True):
         super(URIConverter, self).__init__(url_map)
+        assert base_uri or default, 'base_uri or default must be defined'
         self.base_uri = base_uri
         self.regex = (
-            r"([^:/?#]+:)?(//[^/?#]*)?"
-            r"[^?#]*(\?[^#]*)?(#.*)?"
+            r'([^:/?#]+:)?(//[^/?#]*)?'
+            r'[^?#]*(\?[^#]*)?(#.*)?'
+        ) if default else (
+            r'({0})(.*)'.format(base_uri)
         )
+        self.weigth = 100 if default else 400
 
     def to_python(self, value):
         """Return value with base URI prefix."""
@@ -103,6 +111,8 @@ class TimeGate(object):
 
     def __init__(self, config=None, cache=None):
         """Initialize application with handler."""
+        self.handlers = {}  # registry of handlers
+        self.rules = []  # list of URL rules
         self.config = Config(None)
         self.config.from_object(constants)
         self.config.update(config or {})
@@ -112,33 +122,19 @@ class TimeGate(object):
             self._build_default_cache()
 
     @cached_property
-    def handler(self):
-        handler = load_handler(self.config['HANDLER_MODULE'])
-        HAS_TIMEGATE = hasattr(handler, 'get_memento')
-        HAS_TIMEMAP = hasattr(handler, 'get_all_mementos')
-        if self.config['USE_TIMEMAPS'] and (not HAS_TIMEMAP):
-            logging.error(
-                "Handler has no get_all_mementos() function "
-                "but is suppose to serve timemaps.")
-
-        if not (HAS_TIMEGATE or HAS_TIMEMAP):
-            raise NotImplementedError(
-                "NotImplementedError: Handler has neither `get_memento` "
-                "nor `get_all_mementos` method.")
-        return handler
-
-    @cached_property
     def url_map(self):
         """Build URL map."""
-        base_uri = self.config['BASE_URI']
-        rules = [
-            Rule('/timegate/<uri(base_uri="{0}"):uri_r>'.format(base_uri),
-                 endpoint='timegate', methods=['GET', 'HEAD']),
-            Rule('/timemap/<any(json, link):response_type>/'
-                 '<uri(base_uri="{0}"):uri_r>'.format(base_uri),
-                 endpoint='timemap', methods=['GET', 'HEAD']),
-        ]
-        return Map(rules, converters={'uri': URIConverter})
+        for handler_name, config in self.config.get('HANDLERS', {}).items():
+            if handler_name is None:
+                continue  # we have already regitered default handler
+            self.register_handler(
+                handler_name, CombinedMultiDict([config, self.config])
+            )
+        # Default handler at the end in case the weights are same.
+        self.register_handler(None, CombinedMultiDict([
+            self.config.get('HANDLERS', {}).get(None, {}), self.config
+        ]))
+        return Map(self.rules, converters={'uri': URIConverter})
 
     def _build_default_cache(self):
         """Build default cache object."""
@@ -152,8 +148,46 @@ class TimeGate(object):
     def __repr__(self):
         """Representation of this class."""
         return '<{0} {1}>'.format(
-            self.__class__.__name__, self.handler.__class__.__name__
+            self.__class__.__name__, ', '.join([
+                h.__class__.__name__ for h in self.handlers.items()
+            ])
         )
+
+    def register_handler(self, handler_name, config):
+        """Register handler."""
+        handler = load_handler(config['HANDLER_MODULE'])
+        HAS_TIMEGATE = hasattr(handler, 'get_memento')
+        HAS_TIMEMAP = hasattr(handler, 'get_all_mementos')
+        if config['USE_TIMEMAPS'] and (not HAS_TIMEMAP):
+            logging.error(
+                "Handler has no get_all_mementos() function "
+                "but is suppose to serve timemaps.")
+
+        if not (HAS_TIMEGATE or HAS_TIMEMAP):
+            raise NotImplementedError(
+                "NotImplementedError: Handler has neither `get_memento` "
+                "nor `get_all_mementos` method.")
+
+        handler.use_timemaps = (
+            hasattr(handler, 'get_all_mementos') and config['USE_TIMEMAPS']
+        )
+        handler.resource_type = config['RESOURCE_TYPE']
+
+        endpoint_prefix = '{0}.'.format(handler_name) if handler_name else ''
+        uri_r = '<uri(base_uri="{0}", default={1}):uri_r>'.format(
+            config['BASE_URI'], str(handler_name is None)
+        )
+
+        self.rules.extend([
+            Rule('/timegate/{0}'.format(uri_r),
+                 endpoint=endpoint_prefix + 'timegate',
+                 methods=['GET', 'HEAD']),
+            Rule('/timemap/<any(json, link):response_type>/{0}'.format(uri_r),
+                 endpoint=endpoint_prefix + 'timemap',
+                 methods=['GET', 'HEAD']),
+        ])
+
+        self.handlers[handler_name] = handler
 
     def dispatch_request(self, request):
         """Choose correct method."""
@@ -162,11 +196,13 @@ class TimeGate(object):
         )
         try:
             endpoint, values = adapter.match()
-            return getattr(self, endpoint)(**values)
+            parts = _RE_HANDLER.match(endpoint).groupdict()
+            request.handler = self.handlers[parts['handler_name']]
+            return getattr(self, parts['endpoint'])(**values)
         except HTTPException as e:
             return e
         finally:
-            self.adapter = None
+            request.adapter = request.handler = None
 
     def wsgi_app(self, environ, start_response):
         local.request = request = Request(environ)
@@ -186,7 +222,7 @@ class TimeGate(object):
         :param accept_datetime: Datetime object with requested time.
         :return: The TimeMap if it exists and is valid.
         """
-        return parsed_request(self.handler.get_memento,
+        return parsed_request(request.handler.get_memento,
                               uri_r, accept_datetime)
 
     def get_all_mementos(self, uri_r):
@@ -201,7 +237,7 @@ class TimeGate(object):
         if self.cache and request.cache_control != 'no-cache':
             mementos = self.cache.get_all(uri_r)
         if mementos is None:
-            mementos = parsed_request(self.handler.get_all_mementos, uri_r)
+            mementos = parsed_request(request.handler.get_all_mementos, uri_r)
             if self.cache:
                 self.cache.set(uri_r, mementos)
         return mementos
@@ -224,8 +260,7 @@ class TimeGate(object):
 
         # Runs the handler's API request for the Memento
         mementos = first = last = None
-        HAS_TIMEMAP = hasattr(self.handler, 'get_all_mementos')
-        if HAS_TIMEMAP and self.config['USE_TIMEMAPS']:
+        if request.handler.use_timemaps:
             logging.debug('Using multiple-request mode.')
             mementos = self.get_all_mementos(uri_r)
 
@@ -233,7 +268,7 @@ class TimeGate(object):
             first = mementos[0]
             last = mementos[-1]
             memento = best(mementos, accept_datetime,
-                           self.config['RESOURCE_TYPE'])
+                           request.handler.resource_type)
         else:
             logging.debug('Using single-request mode.')
             memento = self.get_memento(uri_r, accept_datetime)
@@ -244,7 +279,7 @@ class TimeGate(object):
             uri_r,
             first,
             last,
-            has_timemap=HAS_TIMEMAP and self.config['USE_TIMEMAPS'],
+            has_timemap=request.handler.use_timemaps,
         )
 
     def timemap(self, uri_r, response_type='link'):
@@ -258,7 +293,7 @@ class TimeGate(object):
         :param start_response: WSGI callback function.
         :return: The body of the HTTP response.
         """
-        if not self.config['USE_TIMEMAPS']:
+        if not request.handler.use_timemaps:
             abort(403)
 
         mementos = self.get_all_mementos(uri_r)

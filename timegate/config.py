@@ -11,6 +11,8 @@
 
 from __future__ import absolute_import, print_function
 
+import re
+
 from configparser import ConfigParser
 
 from ._compat import string_types
@@ -41,19 +43,36 @@ class Config(dict):
             self['API_TIME_OUT'] = conf.getfloat('server', 'api_time_out')
 
         # Handler configuration
-        if conf.has_option('handler', 'handler_class'):
-            self['HANDLER_MODULE'] = conf.get('handler', 'handler_class')
-        if conf.has_option('handler', 'base_uri'):
-            self['BASE_URI'] = conf.get('handler', 'base_uri')
-        if conf.getboolean('handler', 'is_vcs'):
-            self['RESOURCE_TYPE'] = 'vcs'
-        else:
-            self['RESOURCE_TYPE'] = 'snapshot'
+        def build_handler(section):
+            """Build handler configuration."""
+            output = {}
+            if conf.has_option(section, 'handler_class'):
+                output['HANDLER_MODULE'] = conf.get(section, 'handler_class')
+            if conf.has_option(section, 'base_uri'):
+                output['BASE_URI'] = conf.get(section, 'base_uri')
+            if conf.getboolean(section, 'is_vcs'):
+                output['RESOURCE_TYPE'] = 'vcs'
+            else:
+                output['RESOURCE_TYPE'] = 'snapshot'
 
-        if conf.has_option('handler', 'use_timemap'):
-            self['USE_TIMEMAPS'] = conf.getboolean('handler', 'use_timemap')
-        else:
-            self['USE_TIMEMAPS'] = False
+            if conf.has_option(section, 'use_timemap'):
+                output['USE_TIMEMAPS'] = conf.getboolean(section,
+                                                         'use_timemap')
+            else:
+                output['USE_TIMEMAPS'] = False
+            return output
+
+        self.setdefault('HANDLERS', {})
+        re_handler = re.compile('^handler(:(?P<handler_name>.+))?')
+        for section_name in conf.sections():
+            handler = re_handler.match(section_name)
+            if handler:
+                handler_name = handler.groupdict()['handler_name']
+                section = build_handler(section_name)
+                if handler_name or handler.groups()[0]:
+                    self['HANDLERS'][handler_name] = section
+                else:
+                    self.update(section)
 
         # Cache
         self['CACHE_BACKEND'] = conf.get('cache', 'cache_backend')

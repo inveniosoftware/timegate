@@ -25,11 +25,11 @@ def test_version():
 
 def test_initialization():
     """Test TimeGate initialization."""
-    from timegate.application import TimeGate
+    from timegate.application import TimeGate, request
     from timegate.examples.simple import ExampleHandler
     handler = ExampleHandler()
     app = TimeGate(config=dict(HANDLER_MODULE=handler))
-    assert handler == app.handler
+    assert len(list(app.url_map.iter_rules())) == 2
 
 
 def test_application():
@@ -40,6 +40,43 @@ def test_application():
     client = Client(application.application, BaseResponse)
 
     assert client.get('/').status_code == 404
+
+
+def test_multi_handler():
+    """Test simple request."""
+    from timegate.application import TimeGate, request
+    from timegate.examples.simple import ExampleHandler
+    from werkzeug.test import Client
+    from werkzeug.wrappers import BaseResponse
+
+    base1_uri = 'http://www.example.com/base1/'
+    base2_uri = 'http://www.example.com/base2/'
+    app = TimeGate(config=dict(
+        CACHE_BACKEND='werkzeug.contrib.cache.NullCache',
+        HANDLER_MODULE=ExampleHandler(base_uri=base1_uri),
+        BASE_URI=base1_uri,
+        HANDLERS={
+            'base2': dict(
+                HANDLER_MODULE=ExampleHandler(base_uri=base2_uri),
+                BASE_URI=base2_uri,
+            )
+        },
+    ))
+    client = Client(app, BaseResponse)
+
+    assert len(list(app.url_map.iter_rules())) == 4
+
+    parameters = [
+        ('', base1_uri), (base1_uri, base1_uri), (base2_uri, base2_uri)
+    ]
+    for request_base, response_base in parameters:
+        response = client.get(
+            '/timegate/{0}resourceA'.format(request_base)
+        )
+        assert response.status_code == 302
+        assert response.headers['Location'] == (
+            '{0}resourceA_v3'.format(response_base)
+        )
 
 
 def test_timemap_response(client):
